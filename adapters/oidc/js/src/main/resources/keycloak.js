@@ -75,7 +75,9 @@
         }
 
         var useNonce = true;
-
+        var logInfo = createLogger(console.info);
+        var logWarn = createLogger(console.warn);
+        
         kc.init = function (initOptions) {
             kc.authenticated = false;
 
@@ -108,8 +110,9 @@
                 }
 
                 if (initOptions.promiseType === 'native') {
-                    kc.useNativePromise = typeof Promise === "function";
+                    kc.useNativePromise = true;
                 } else {
+                    console.warn('[KEYCLOAK] Using legacy promises is deprecated and will be removed in future versions. You can opt in to using native promises by setting `promiseType` to \'native\' when initializing Keycloak.');
                     kc.useNativePromise = false;
                 }
 
@@ -161,6 +164,11 @@
                     kc.pkceMethod = initOptions.pkceMethod;
                 }
 
+                if (typeof initOptions.enableLogging === 'boolean') {
+                    kc.enableLogging = initOptions.enableLogging;
+                } else {
+                    kc.enableLogging = false;
+                }
             }
 
             if (!kc.responseMode) {
@@ -557,7 +565,7 @@
             }
 
             if (kc.timeSkew == null) {
-                console.info('[KEYCLOAK] Unable to determine if token is expired as timeskew is not set');
+                logInfo('[KEYCLOAK] Unable to determine if token is expired as timeskew is not set');
                 return true;
             }
 
@@ -585,10 +593,10 @@
                 var refreshToken = false;
                 if (minValidity == -1) {
                     refreshToken = true;
-                    console.info('[KEYCLOAK] Refreshing token: forced refresh');
+                    logInfo('[KEYCLOAK] Refreshing token: forced refresh');
                 } else if (!kc.tokenParsed || kc.isTokenExpired(minValidity)) {
                     refreshToken = true;
-                    console.info('[KEYCLOAK] Refreshing token: token expired');
+                    logInfo('[KEYCLOAK] Refreshing token: token expired');
                 }
 
                 if (!refreshToken) {
@@ -616,7 +624,7 @@
                         req.onreadystatechange = function () {
                             if (req.readyState == 4) {
                                 if (req.status == 200) {
-                                    console.info('[KEYCLOAK] Token refreshed');
+                                    logInfo('[KEYCLOAK] Token refreshed');
 
                                     timeLocal = (timeLocal + new Date().getTime()) / 2;
 
@@ -629,7 +637,7 @@
                                         p.setSuccess(true);
                                     }
                                 } else {
-                                    console.warn('[KEYCLOAK] Failed to refresh token');
+                                    logWarn('[KEYCLOAK] Failed to refresh token');
 
                                     if (req.status == 400) {
                                         kc.clearToken();
@@ -760,7 +768,7 @@
                     (kc.refreshTokenParsed && kc.refreshTokenParsed.nonce != oauth.storedNonce) ||
                     (kc.idTokenParsed && kc.idTokenParsed.nonce != oauth.storedNonce))) {
 
-                    console.info('[KEYCLOAK] Invalid nonce, clearing token');
+                    logInfo('[KEYCLOAK] Invalid nonce, clearing token');
                     kc.clearToken();
                     promise && promise.setError();
                 } else {
@@ -967,11 +975,11 @@
                 }
 
                 if (kc.timeSkew != null) {
-                    console.info('[KEYCLOAK] Estimated time difference between browser and server is ' + kc.timeSkew + ' seconds');
+                    logInfo('[KEYCLOAK] Estimated time difference between browser and server is ' + kc.timeSkew + ' seconds');
 
                     if (kc.onTokenExpired) {
                         var expiresIn = (kc.tokenParsed['exp'] - (new Date().getTime() / 1000) + kc.timeSkew) * 1000;
-                        console.info('[KEYCLOAK] Token expires in ' + Math.round(expiresIn / 1000) + ' s');
+                        logInfo('[KEYCLOAK] Token expires in ' + Math.round(expiresIn / 1000) + ' s');
                         if (expiresIn <= 0) {
                             kc.onTokenExpired();
                         } else {
@@ -1674,6 +1682,14 @@
             }
 
             return new CookieStorage();
+        }
+
+        function createLogger(fn) {
+            return function() {
+                if (kc.enableLogging) {
+                    fn.apply(console, Array.prototype.slice.call(arguments));
+                }
+            };
         }
     }
 

@@ -367,9 +367,6 @@ public class BruteForceTest extends AbstractTestRealmKeycloakTest {
         loginSuccess();
         loginMissingPassword();
         loginMissingPassword();
-        expectTemporarilyDisabled();
-        expectTemporarilyDisabled("test-user@localhost", null, "invalid");
-        clearUserFailures();
         loginSuccess();
     }
 

@@ -32,6 +32,7 @@ import org.keycloak.admin.client.resource.AuthenticationManagementResource;
 import org.keycloak.admin.client.resource.RealmsResource;
 import org.keycloak.admin.client.resource.UserResource;
 import org.keycloak.admin.client.resource.UsersResource;
+import org.keycloak.common.Profile;
 import org.keycloak.common.util.KeycloakUriBuilder;
 import org.keycloak.common.util.Time;
 import org.keycloak.representations.idm.ClientRepresentation;
@@ -61,6 +62,7 @@ import org.keycloak.testsuite.util.TestEventsLogger;
 import org.openqa.selenium.WebDriver;
 
 import javax.ws.rs.NotFoundException;
+import javax.ws.rs.core.Response;
 import javax.ws.rs.core.UriBuilder;
 
 import java.io.IOException;
@@ -77,9 +79,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.stream.Collectors;
 
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
 import static org.keycloak.testsuite.admin.Users.setPasswordFor;
 import static org.keycloak.testsuite.auth.page.AuthRealm.ADMIN;
@@ -148,6 +152,7 @@ public abstract class AbstractKeycloakTest {
     private PropertiesConfiguration constantsProperties;
 
     private boolean resetTimeOffset;
+    private List<Profile.Feature> enabledFeatures = new ArrayList<>();
 
     @Before
     public void beforeAbstractKeycloakTest() throws Exception {
@@ -186,13 +191,8 @@ public abstract class AbstractKeycloakTest {
     }
 
     public void reconnectAdminClient() throws Exception {
-        if (adminClient != null && !adminClient.isClosed()) {
-            adminClient.close();
-        }
-
-        String authServerContextRoot = suiteContext.getAuthServerInfo().getContextRoot().toString();
-        adminClient = AdminClientUtil.createAdminClient(suiteContext.isAdapterCompatTesting(), authServerContextRoot);
-        testContext.setAdminClient(adminClient);
+        testContext.reconnectAdminClient();
+        adminClient = testContext.getAdminClient();
     }
 
     protected void beforeAbstractKeycloakTestRealmImport() throws Exception {
@@ -215,11 +215,8 @@ public abstract class AbstractKeycloakTest {
             }
         } else {
             log.info("calling all TestCleanup");
-            // Logout all users after the test
-            List<RealmRepresentation> realms = testContext.getTestRealmReps();
-            for (RealmRepresentation realm : realms) {
-                adminClient.realm(realm.getRealm()).logoutAll();
-            }
+            // Remove all sessions
+            testContext.getTestRealmReps().stream().forEach((r)->testingClient.testing().removeUserSessions(r.getRealm()));
 
             // Cleanup objects
             for (TestCleanup cleanup : testContext.getCleanups().values()) {
@@ -231,6 +228,10 @@ public abstract class AbstractKeycloakTest {
                 }
             }
             testContext.getCleanups().clear();
+        }
+
+        for (Profile.Feature feature : enabledFeatures) {
+            disableFeature(feature);
         }
 
         postAfterAbstractKeycloak();
@@ -637,5 +638,18 @@ public abstract class AbstractKeycloakTest {
             }
         }
         return in;
+    }
+
+    protected void enableFeature(Profile.Feature feature) {
+        enabledFeatures.add(feature);
+        try (Response response = getTestingClient().testing().enableFeature(feature.toString())) {
+            assertEquals(200, response.getStatus());
+        }
+    }
+
+    protected void disableFeature(Profile.Feature feature) {
+        try (Response response = getTestingClient().testing().disableFeature(feature.toString())) {
+            assertEquals(200, response.getStatus());
+        }
     }
 }

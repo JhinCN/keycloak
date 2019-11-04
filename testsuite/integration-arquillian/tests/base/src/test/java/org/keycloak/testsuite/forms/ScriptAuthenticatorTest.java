@@ -67,7 +67,9 @@ public class ScriptAuthenticatorTest extends AbstractFlowTest {
 
     @BeforeClass
     public static void verifyEnvironment() {
+        // TODO: we should probably enable SCRIPTS automatically when UPLOAD_SCRIPTS is enabled
         ProfileAssume.assumeFeatureEnabled(Profile.Feature.SCRIPTS);
+        ProfileAssume.assumeFeatureEnabled(Profile.Feature.UPLOAD_SCRIPTS);
     }
 
     @Override

@@ -68,16 +68,13 @@ public class WelcomeResource {
 
     private static final String KEYCLOAK_STATE_CHECKER = "WELCOME_STATE_CHECKER";
 
-    private boolean bootstrap;
-
     @Context
     protected HttpHeaders headers;
 
     @Context
     private KeycloakSession session;
 
-    public WelcomeResource(boolean bootstrap) {
-        this.bootstrap = bootstrap;
+    public WelcomeResource() {
     }
 
     /**
@@ -105,7 +102,7 @@ public class WelcomeResource {
     public Response createUser(final MultivaluedMap<String, String> formData) {
         checkBootstrap();
 
-        if (!bootstrap) {
+        if (!shouldBootstrap()) {
             return createWelcomePage(null, null);
         } else {
             if (!isLocal()) {
@@ -139,7 +136,7 @@ public class WelcomeResource {
 
             ApplianceBootstrap applianceBootstrap = new ApplianceBootstrap(session);
             if (applianceBootstrap.isNoMasterUser()) {
-                bootstrap = false;
+                setBootstrap(false);
                 applianceBootstrap.createMasterRealmUser(username, password);
 
                 ServicesLogger.LOGGER.createdInitialAdminUser(username);
@@ -177,20 +174,21 @@ public class WelcomeResource {
 
     private Response createWelcomePage(String successMessage, String errorMessage) {
         try {
-          Theme theme = getTheme();
+            Theme theme = getTheme();
 
-          Map<String, Object> map = new HashMap<>();
+            Map<String, Object> map = new HashMap<>();
 
-          map.put("productName", Version.NAME);
-          map.put("productNameFull", Version.NAME_FULL);
+            map.put("productName", Version.NAME);
+            map.put("productNameFull", Version.NAME_FULL);
 
-          map.put("properties", theme.getProperties());
+            map.put("properties", theme.getProperties());
 
-          URI uri = Urls.themeRoot(session.getContext().getUri().getBaseUri());
-          String resourcesPath = uri.getPath() + "/" + theme.getType().toString().toLowerCase() +"/" + theme.getName();
-          map.put("resourcesPath", resourcesPath);
+            URI uri = Urls.themeRoot(session.getContext().getUri().getBaseUri());
+            String resourcesPath = uri.getPath() + "/" + theme.getType().toString().toLowerCase() + "/" + theme.getName();
+            map.put("resourcesPath", resourcesPath);
 
-           map.put("bootstrap", bootstrap);
+            boolean bootstrap = shouldBootstrap();
+            map.put("bootstrap", bootstrap);
             if (bootstrap) {
                 boolean isLocal = isLocal();
                 map.put("localUser", isLocal);
@@ -228,9 +226,16 @@ public class WelcomeResource {
     }
 
     private void checkBootstrap() {
-        if (bootstrap) {
-            bootstrap  = new ApplianceBootstrap(session).isNoMasterUser();
-        }
+        if (shouldBootstrap())
+            KeycloakApplication.BOOTSTRAP_ADMIN_USER.compareAndSet(true, new ApplianceBootstrap(session).isNoMasterUser());
+    }
+
+    private boolean shouldBootstrap() {
+        return KeycloakApplication.BOOTSTRAP_ADMIN_USER.get();
+    }
+
+    private void setBootstrap(boolean value) {
+        KeycloakApplication.BOOTSTRAP_ADMIN_USER.set(value);
     }
 
     private boolean isLocal() {

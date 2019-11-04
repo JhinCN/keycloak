@@ -21,7 +21,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jboss.dmr.ModelNode;
 import org.jboss.logging.Logger;
-import org.jboss.resteasy.core.Dispatcher;
 import org.keycloak.Config;
 import org.keycloak.common.util.Resteasy;
 import org.keycloak.common.util.SystemEnvProperties;
@@ -64,7 +63,6 @@ import javax.servlet.ServletContext;
 import javax.transaction.SystemException;
 import javax.transaction.Transaction;
 import javax.ws.rs.core.Application;
-import javax.ws.rs.core.Context;
 import javax.ws.rs.core.UriInfo;
 import java.io.File;
 import java.io.FileInputStream;
@@ -75,11 +73,14 @@ import java.net.URI;
 import java.net.URL;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.StringTokenizer;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -96,6 +97,8 @@ public class KeycloakApplication extends Application {
 
     public static final String SERVER_CONTEXT_CONFIG_PROPERTY_OVERRIDES = "keycloak.server.context.config.property-overrides";
 
+    public static final AtomicBoolean BOOTSTRAP_ADMIN_USER = new AtomicBoolean(false);
+
     private static final Logger logger = Logger.getLogger(KeycloakApplication.class);
 
     protected boolean embedded = false;
@@ -107,13 +110,17 @@ public class KeycloakApplication extends Application {
     protected String contextPath;
 
     public KeycloakApplication() {
+
         try {
+
+            logger.debugv("RestEasy provider: {0}", Resteasy.getProvider().getClass().getName());
+
             ServletContext context = Resteasy.getContextData(ServletContext.class);
 
             if ("true".equals(context.getInitParameter(KEYCLOAK_EMBEDDED))) {
                 embedded = true;
             }
-            
+
             loadConfig(context);
 
             this.contextPath = context.getContextPath();
@@ -133,53 +140,72 @@ public class KeycloakApplication extends Application {
             classes.add(KeycloakErrorHandler.class);
 
             singletons.add(new ObjectMapperResolver(Boolean.parseBoolean(System.getProperty("keycloak.jsonPrettyPrint", "false"))));
+            singletons.add(new WelcomeResource());
 
-            ExportImportManager[] exportImportManager = new ExportImportManager[1];
+            init(this::startup);
 
-            KeycloakModelUtils.runJobInTransaction(sessionFactory, new KeycloakSessionTask() {
-
-                @Override
-                public void run(KeycloakSession lockSession) {
-                    DBLockManager dbLockManager = new DBLockManager(lockSession);
-                    dbLockManager.checkForcedUnlock();
-                    DBLockProvider dbLock = dbLockManager.getDBLock();
-                    dbLock.waitForLock(DBLockProvider.Namespace.KEYCLOAK_BOOT);
-                    try {
-                        exportImportManager[0] = migrateAndBootstrap();
-                    } finally {
-                        dbLock.releaseLock();
-                    }
-                }
-
-            });
-
-
-            if (exportImportManager[0].isRunExport()) {
-                exportImportManager[0].runExport();
-            }
-
-            AtomicBoolean bootstrapAdminUser = new AtomicBoolean(false);
-            KeycloakModelUtils.runJobInTransaction(sessionFactory, new KeycloakSessionTask() {
-
-                @Override
-                public void run(KeycloakSession session) {
-                    boolean shouldBootstrapAdmin = new ApplianceBootstrap(session).isNoMasterUser();
-                    bootstrapAdminUser.set(shouldBootstrapAdmin);
-                }
-
-            });
-
-            sessionFactory.publish(new PostMigrationEvent());
-
-            singletons.add(new WelcomeResource(bootstrapAdminUser.get()));
-
-            setupScheduledTasks(sessionFactory);
         } catch (Throwable t) {
             if (!embedded) {
                 exit(1);
             }
             throw t;
         }
+
+    }
+
+    private void init(Runnable function) {
+
+        ServiceLoader<Startup> loader = ServiceLoader.load(Startup.class);
+        Iterator<Startup> iterator = loader.iterator();
+
+        if (iterator.hasNext()) {
+            iterator.next().execute(function);
+        } else {
+            function.run();
+        }
+
+    }
+
+    protected void startup() {
+
+        ExportImportManager[] exportImportManager = new ExportImportManager[1];
+
+        KeycloakModelUtils.runJobInTransaction(sessionFactory, new KeycloakSessionTask() {
+
+            @Override
+            public void run(KeycloakSession lockSession) {
+                DBLockManager dbLockManager = new DBLockManager(lockSession);
+                dbLockManager.checkForcedUnlock();
+                DBLockProvider dbLock = dbLockManager.getDBLock();
+                dbLock.waitForLock(DBLockProvider.Namespace.KEYCLOAK_BOOT);
+                try {
+                    exportImportManager[0] = migrateAndBootstrap();
+                } finally {
+                    dbLock.releaseLock();
+                }
+            }
+
+        });
+
+
+        if (exportImportManager[0].isRunExport()) {
+            exportImportManager[0].runExport();
+        }
+
+        KeycloakModelUtils.runJobInTransaction(sessionFactory, new KeycloakSessionTask() {
+
+            @Override
+            public void run(KeycloakSession session) {
+                boolean shouldBootstrapAdmin = new ApplianceBootstrap(session).isNoMasterUser();
+                BOOTSTRAP_ADMIN_USER.set(shouldBootstrapAdmin);
+            }
+
+        });
+
+        sessionFactory.publish(new PostMigrationEvent());
+
+        setupScheduledTasks(sessionFactory);
+
     }
 
     // Migrate model, bootstrap master realm, import realms and create admin user. This is done with acquired dbLock
@@ -312,14 +338,14 @@ public class KeycloakApplication extends Application {
             throw new RuntimeException("Failed to load config", e);
         }
     }
-    
+
     private static String loadDmrConfig(ServletContext context) {
         String dmrConfig = context.getInitParameter(KEYCLOAK_CONFIG_PARAM_NAME);
         if (dmrConfig == null) return null;
 
         ModelNode dmrConfigNode = ModelNode.fromString(dmrConfig);
         if (dmrConfigNode.asPropertyList().isEmpty()) return null;
-        
+
         // note that we need to resolve expressions BEFORE we convert to JSON
         return dmrConfigNode.resolve().toJSONString(true);
     }
@@ -486,6 +512,9 @@ public class KeycloakApplication extends Application {
                 System.exit(status);
             }
         }.start();
+    }
+
+    public static interface Startup extends Executor {
     }
 
 }
